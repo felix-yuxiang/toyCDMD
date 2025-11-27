@@ -39,6 +39,30 @@ class Swissroll(Dataset):
     def __getitem__(self, i):
         return self.vals[i]
 
+class Checkerboard(Dataset):
+    def __init__(self, N, scale=0.45):
+        """
+        Create a checkerboard pattern dataset.
+        
+        Args:
+            N: Number of samples
+            scale: Scaling factor (default 0.45 to match the original function)
+        """
+        self.scale = scale
+        
+        # Generate all samples at initialization
+        x1 = torch.rand(N) * 4 - 2
+        x2_ = torch.rand(N) - torch.randint(high=2, size=(N,)) * 2
+        x2 = x2_ + (torch.floor(x1) % 2)
+        
+        self.vals = torch.stack([x1, x2], dim=1) / self.scale
+        
+    def __len__(self):
+        return len(self.vals)
+    
+    def __getitem__(self, i):
+        return self.vals[i]
+    
 class DatasaurusDozen(Dataset):
     def __init__(self, csv_file, dataset, enlarge_factor=15, delimiter='\t', scale=50, offset=50):
         self.enlarge_factor = enlarge_factor
