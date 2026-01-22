@@ -37,6 +37,7 @@ dependencies = [
   "torch",
   "tqdm",
   "einops",
+  "scipy>=1.15.3",
 ]
 
 [project.urls]
@@ -67,4 +68,9 @@ build-backend = "setuptools.build_meta"
 markers = [
     "run_slow: mark tests as slow, skip unless --run_slow flag is passed",
     "serial",
+]
+
+[tool.uv.workspace]
+members = [
+    "examples",
 ]

@@ -112,6 +112,38 @@ def training_loop(loader      : DataLoader,
             accelerator.backward(loss)
             optimizer.step()
 
+
+def training_loop_and_eval(loader      : DataLoader,
+                  model       : nn.Module,
+                  schedule    : Schedule,
+                  accelerator : Optional[Accelerator] = None,
+                  epochs      : int = 10000,
+                  lr          : float = 1e-3,
+                  conditional : bool = False,
+                  plot_batch  : Optional[callable] = None,
+                  dataset_name : str = None):
+    import matplotlib.pyplot as plt
+    accelerator = accelerator or Accelerator()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    model, optimizer, loader = accelerator.prepare(model, optimizer, loader)
+    for epoch in (pbar := tqdm(range(epochs))):
+        for x0 in loader:
+            model.train()
+            optimizer.zero_grad()
+            x0, sigma, eps, cond = generate_train_sample(x0, schedule, conditional)
+            loss = model.get_loss(x0, sigma, eps, cond=cond)
+            yield SimpleNamespace(**locals()) # For extracting training statistics
+            accelerator.backward(loss)
+            optimizer.step()
+        
+        if epoch % 2000 == 0:
+            *xts, x0 = samples(model, schedule.sample_sigmas(20), batchsize=1500, gam=2, mu=0)
+            # batch = x0.cpu().numpy()
+            plt.clf()
+            plot_batch(x0)
+            plt.title(f'Epoch: {epoch}')
+            plt.savefig(f"../outputs/toyexample_generated_samples_{dataset_name}_epoch_{epoch}.png")
+
 # Generalizes most commonly-used samplers:
 #   DDPM       : gam=1, mu=0.5
 #   DDIM       : gam=1, mu=0

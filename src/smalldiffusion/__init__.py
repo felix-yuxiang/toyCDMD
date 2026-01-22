@@ -1,11 +1,11 @@
 from .diffusion import (
     Schedule, ScheduleLogLinear, ScheduleDDPM, ScheduleLDM, ScheduleCosine,
-    ScheduleSigmoid, training_loop, samples,
+    ScheduleSigmoid, training_loop, samples, training_loop_and_eval
 )
 
 from .data import (
     Swissroll, DatasaurusDozen, MappedDataset, img_train_transform, img_normalize,
-    TreeDataset,
+    TreeDataset, Checkerboard
 )
 
 from .model import (
