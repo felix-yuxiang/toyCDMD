@@ -517,7 +517,7 @@ def visualize_cdmd_progress(
 
             ax = axes[i, j + 1]
             ax.scatter(target_points[:, 0], target_points[:, 1], s=5, alpha=0.05, color='blue', label='Target')
-            ax.scatter(student_samples[:, 0], student_samples[:, 1], s=5, alpha=0.3, color='red', label='Student')
+            ax.scatter(student_samples[:, 0], student_samples[:, 1], s=5, alpha=0.3, color='yellow', label='Student')
             ax.set_xlim(-3, 3)
             ax.set_ylim(-3, 3)
             ax.set_aspect('equal')
@@ -594,7 +594,7 @@ if __name__ == "__main__":
             initial_points=initial_points,
             teacher_model=teacher_model,
             target_points=target_points,
-            student_steps_list=[args.student_steps, 2],
+            student_steps_list=[args.student_steps],
             teacher_steps=100,
             model_kwargs={'input_dim': 2, 'h_dim': args.h_dim},
             checkpoint_prefix=checkpoint_prefix,
