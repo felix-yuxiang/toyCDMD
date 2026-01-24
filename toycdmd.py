@@ -234,7 +234,7 @@ def compute_distribution_matching_loss(
 
     # Student generates samples from noise (with gradients)
     generated_samples = forward_euler_integration(
-        noise, student_model, t_start= 0.99, t_end=0.0,
+        noise, student_model, t_start= 1.0, t_end=0.0,
         num_steps=student_steps, device=device
     )
 
@@ -251,8 +251,8 @@ def compute_distribution_matching_loss(
     x_t1 = (1 - t) * generated_samples + t * noise
 
 
-    gap_min = 0.10
-    gap_max = 0.30
+    gap_min = 0.01
+    gap_max = 0.40
     gap = torch.rand(batch_size, 1, device=device) * (gap_max - gap_min) + gap_min
 
     t2 = t + gap
@@ -267,7 +267,9 @@ def compute_distribution_matching_loss(
         # From x_t = (1-t)*x_0 + t*noise and v = noise - x_0, we get x_0 = x_t - t*v
         # teacher_x0 = x_t2 - t2 * teacher_velocity_t2
         # xt_next_hat = x_t2 - (t2 - t) * teacher_velocity_t2
+        # noise_new = torch.randn_like(noise).to(device)
         xt_next_hat = forward_euler_active_set_train(x_t2, teacher_model, t2, t, step_size=0.01, device=device)
+        # xt_next_hat = forward_euler_active_set_train(noise, teacher_model, torch.ones_like(t), t, step_size=0.01, device=device)
 
         # Step 4: Get velocities at time t for both paths
         # - teacher_velocity: velocity at the "corrected" point (using teacher's x0)
@@ -277,11 +279,12 @@ def compute_distribution_matching_loss(
 
         ##### ??????
         student_velocity = teacher_model(x_t1, t)
-        # student_velocity = noise - generated_samples
 
         # Distribution matching loss: difference between the two velocity predictions
         # p_diff = (teacher_velocity - student_velocity) * t
         p_diff = - (xt_next_hat - teacher_velocity * t) + (x_t1 - student_velocity * t)
+        p_diff_coarse = generated_samples - (xt_next_hat - teacher_velocity * t)
+        p_diff = (p_diff + p_diff_coarse) / 2
         # weight_factor_t2 = torch.abs(generated_samples - x_t2 + t2 * teacher_velocity_t2).mean(dim=1, keepdim=True)
         weight_factor_t1 = torch.abs(generated_samples - x_t1 + t * teacher_velocity).mean(dim=1, keepdim=True).clamp(min=1e-5)
         # p_diff = (teacher_velocity - student_velocity) 
@@ -348,7 +351,7 @@ def train_cdmd(
 
         for batch_idx in range(batches_per_epoch):
             noise = source_generator.generate(batch_size).to(device)
-            start, end = 0.0, 0.69
+            start, end = 0.0, 0.59
             t = torch.rand(batch_size, 1, device=device) * (end - start) + start
 
             # Update student model
@@ -429,7 +432,7 @@ def visualize_cdmd_results(
     # Compute teacher_x0 estimate (single-step x0 prediction from noise)
     # Using the same logic as in compute_distribution_matching_loss
     with torch.no_grad():
-        t = torch.ones(num_points, 1, device=device) * 0.99  # Start from t close to 1
+        t = torch.ones(num_points, 1, device=device)  # Start from t close to 1
         x_t = noise  # At t=1, x_t is approximately noise
         teacher_velocity = teacher_model(x_t, t)
         # x_0 = x_t - t * v (from flow matching: x_t = (1-t)*x_0 + t*noise, v = noise - x_0)
