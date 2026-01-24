@@ -12,12 +12,12 @@ python toydmd2.py \
     --teacher_checkpoint ${OUTPUT_DIR}/flow_model_${DATASET}_epoch_100.pt \
     --dataset $DATASET \
     --epochs $EPOCHS \
-    --batch_size 2048 \
+    --batch_size 4096 \
     --lr_student 1e-4 \
     --lr_proxy 1e-4 \
     --h_dim 128 \
     --student_steps $STUDENT_STEPS \
-    --proxy_update_ratio 6 \
+    --proxy_update_ratio 10 \
     --epoch_save_freq 10 \
     --output_dir $OUTPUT_DIR \
     --num_points 4000

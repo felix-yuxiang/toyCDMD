@@ -128,6 +128,58 @@ def forward_euler_integration(
 
     return current_points
 
+def forward_euler_active_set_train(
+    initial_points: torch.Tensor,
+    model: nn.Module,
+    t_start: torch.Tensor, # Shape (B,) - Large values
+    t_end: torch.Tensor,   # Shape (B,) - Small values
+    step_size: float = 0.01,
+    device='cpu'
+) -> torch.Tensor:
+    
+    B = initial_points.shape[0]
+    current_points = initial_points.clone().to(device)
+    curr_t = t_start.clone().to(device).view(-1, 1)
+    t_end = t_end.to(device).view(-1, 1)
+    
+    final_output = torch.zeros_like(initial_points)
+    active_indices = torch.arange(B, device=device)
+
+    # Integration Loop
+    while active_indices.numel() > 0:
+        
+        # Calculate remaining gap (since t_start > t_end, gap is positive)
+        remaining_gap = curr_t - t_end
+        
+        # Identify finished samples (gap is zero or negative)
+        finished_mask = (remaining_gap <= 0).squeeze(-1)
+        
+        if finished_mask.any():
+            final_output[active_indices[finished_mask]] = current_points[finished_mask]
+            
+            # Shrink active set
+            active_mask = ~finished_mask
+            active_indices = active_indices[active_mask]
+            current_points = current_points[active_mask]
+            curr_t = curr_t[active_mask]
+            t_end = t_end[active_mask]
+            remaining_gap = remaining_gap[active_mask]
+            
+            if active_indices.numel() == 0:
+                break
+
+        # Use the standard step_size unless it would overshoot t_end
+        actual_dt = torch.clamp(remaining_gap, max=step_size)
+
+        # Forward pass on active batch
+        velocity = model(current_points, curr_t)
+        
+        # Update: Subtract because we are moving backwards from t_start to t_end
+        current_points = current_points - velocity * actual_dt
+        curr_t = curr_t - actual_dt
+
+    return final_output
+
 
 @torch.no_grad()
 def forward_euler_integration_no_grad(
@@ -182,21 +234,24 @@ def compute_distribution_matching_loss(
 
     # Student generates samples from noise (with gradients)
     generated_samples = forward_euler_integration(
-        noise, student_model, t_start=0.99, t_end=0.0,
+        noise, student_model, t_start= 0.99, t_end=0.0,
         num_steps=student_steps, device=device
     )
 
     # print the norm average of genrated_samples
-    print("Generated samples norm average:", torch.norm(generated_samples, dim=1).mean().item())
+    # print("Generated samples norm average:", torch.norm(generated_samples, dim=1).mean().item())
 
     # Create interpolated samples: x_t = (1-t) * x_generated + t * noise
     # This follows flow matching interpolation convention
     # noise = torch.randn_like(noise).to(device) 
     # Note t2 > t1
+
+    # shared_noise = noise
+    # noise = torch.randn_like(noise).to(device)
     x_t1 = (1 - t) * generated_samples + t * noise
 
 
-    gap_min = 0.01
+    gap_min = 0.10
     gap_max = 0.30
     gap = torch.rand(batch_size, 1, device=device) * (gap_max - gap_min) + gap_min
 
@@ -206,32 +261,35 @@ def compute_distribution_matching_loss(
     # Get velocity predictions from teacher (frozen)
     with torch.no_grad():
         # Step 1: Get teacher velocity at t2
-        teacher_velocity_t2 = teacher_model(x_t2, t2)
+        # teacher_velocity_t2 = teacher_model(x_t2, t2)
 
         # Step 2: Estimate x0 using teacher's prediction at t2
         # From x_t = (1-t)*x_0 + t*noise and v = noise - x_0, we get x_0 = x_t - t*v
         # teacher_x0 = x_t2 - t2 * teacher_velocity_t2
-
-        # Step 3: Re-interpolate to time t using teacher's x0 estimate
-        # xt_next_hat = (1 - t) * teacher_x0 + t * noise
-
-
-        xt_next_hat = x_t2 - (t2 - t) * teacher_velocity_t2
+        # xt_next_hat = x_t2 - (t2 - t) * teacher_velocity_t2
+        xt_next_hat = forward_euler_active_set_train(x_t2, teacher_model, t2, t, step_size=0.01, device=device)
 
         # Step 4: Get velocities at time t for both paths
         # - teacher_velocity: velocity at the "corrected" point (using teacher's x0)
         # - student_velocity: velocity at the student's interpolated point
+        ### we intend to obtain accurate estimate of v at t 
         teacher_velocity = teacher_model(xt_next_hat, t)
 
         ##### ??????
-        # student_velocity = teacher_model(x_t1, t)
-        student_velocity = noise - generated_samples
+        student_velocity = teacher_model(x_t1, t)
+        # student_velocity = noise - generated_samples
 
         # Distribution matching loss: difference between the two velocity predictions
-        p_diff = (teacher_velocity - student_velocity) * t
-        weight_factor = torch.abs(generated_samples - x_t2 + t2 * teacher_velocity_t2).mean(dim=1, keepdim=True)
+        # p_diff = (teacher_velocity - student_velocity) * t
+        p_diff = - (xt_next_hat - teacher_velocity * t) + (x_t1 - student_velocity * t)
+        # weight_factor_t2 = torch.abs(generated_samples - x_t2 + t2 * teacher_velocity_t2).mean(dim=1, keepdim=True)
+        weight_factor_t1 = torch.abs(generated_samples - x_t1 + t * teacher_velocity).mean(dim=1, keepdim=True).clamp(min=1e-5)
         # p_diff = (teacher_velocity - student_velocity) 
         # weight_factor = torch.abs(teacher_velocity).mean(dim=1, keepdim=True).clamp(min=1e-4)
+        # weight_factor = (weight_factor_t2 + weight_factor_t1) / 2
+        weight_factor = weight_factor_t1
+        # weight_factor = 1.0
+
         grad = p_diff / weight_factor
         grad = torch.nan_to_num(grad)
         # grad = p_diff
@@ -517,7 +575,7 @@ def visualize_cdmd_progress(
 
             ax = axes[i, j + 1]
             ax.scatter(target_points[:, 0], target_points[:, 1], s=5, alpha=0.05, color='blue', label='Target')
-            ax.scatter(student_samples[:, 0], student_samples[:, 1], s=5, alpha=0.3, color='yellow', label='Student')
+            ax.scatter(student_samples[:, 0], student_samples[:, 1], s=5, alpha=0.3, color='orange', label='Student')
             ax.set_xlim(-3, 3)
             ax.set_ylim(-3, 3)
             ax.set_aspect('equal')

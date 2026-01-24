@@ -12,8 +12,8 @@ python toycdmd.py \
     --teacher_checkpoint ${OUTPUT_DIR}/flow_model_${DATASET}_epoch_100.pt \
     --dataset $DATASET \
     --epochs $EPOCHS \
-    --batch_size 2048 \
-    --lr_student 1e-4 \
+    --batch_size 4096 \
+    --lr_student 1e-4\
     --h_dim 128 \
     --student_steps $STUDENT_STEPS \
     --epoch_save_freq 10 \
