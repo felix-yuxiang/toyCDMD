@@ -45,6 +45,7 @@ class TrajectoryCache:
         num_trajectories: int,
         n_dims: int,
         max_steps: int,
+        source_generator,
         device: str = 'cpu'
     ):
         """
@@ -52,11 +53,13 @@ class TrajectoryCache:
             num_trajectories: Number of trajectories in the cache (K)
             n_dims: Dimension of data points
             max_steps: Maximum number of steps per trajectory (T)
+            source_generator: Generator for noise samples
             device: Device to store tensors
         """
         self.num_trajectories = num_trajectories
         self.n_dims = n_dims
         self.max_steps = max_steps
+        self.source_generator = source_generator
         self.device = device
 
         # Cache storage: list of trajectories, each trajectory is a list of points
@@ -73,10 +76,11 @@ class TrajectoryCache:
     def _initialize_cache(self):
         """Initialize cache with noise samples (one point per trajectory)."""
         self.trajectories = []
-        for _ in range(self.num_trajectories):
+        # Generate all noise samples at once using source_generator
+        all_noise = self.source_generator.generate(self.num_trajectories).to(self.device)
+        for i in range(self.num_trajectories):
             # Start each trajectory with a noise sample (t=1)
-            noise = torch.randn(self.n_dims, device=self.device)
-            self.trajectories.append([noise])
+            self.trajectories.append([all_noise[i]])
 
     def get_trajectory_length(self, idx: int) -> int:
         """Get current length of trajectory idx."""
@@ -88,7 +92,7 @@ class TrajectoryCache:
 
     def reset_trajectory(self, idx: int):
         """Reset trajectory idx with new noise sample."""
-        noise = torch.randn(self.n_dims, device=self.device)
+        noise = self.source_generator.generate(1).to(self.device).squeeze(0)
         self.trajectories[idx] = [noise]
         self.lifespan_counters[idx] = 0
 
@@ -183,7 +187,7 @@ def compute_cached_cdmd_loss(
         x_tau = cache.get_point_at_step(traj_idx, s).unsqueeze(0).to(device)
 
         # Sample new noise z for forward mapping
-        z = torch.randn_like(x_T)
+        z = torch.randn_like(x_T).to(device)
 
         # Student forward pass: generate x_theta from noise
         x_theta = forward_euler_integration(
@@ -200,7 +204,7 @@ def compute_cached_cdmd_loss(
             # At the latest timestep of this trajectory
             # Get teacher prediction at current point
             with torch.no_grad():
-                mu_tau = teacher_model(x_tau, t_tau_tensor)
+                v_tau = teacher_model(x_tau, t_tau_tensor)
 
             if can_extend:
                 # Extend the trajectory by computing next point
@@ -209,12 +213,12 @@ def compute_cached_cdmd_loss(
 
                 # Accurate ODE reverse step: x_{tau-1} = x_tau - dt * v(x_tau, t_tau)
                 with torch.no_grad():
-                    x_tau_minus_1 = x_tau - dt * mu_tau
+                    x_tau_minus_1 = x_tau - dt * v_tau
                     # Append to cache
                     cache.append_point(traj_idx, x_tau_minus_1.squeeze(0))
 
             # Use teacher velocity at current point as reference
-            mu_r = mu_tau
+            mu_r = x_tau - v_tau * t_tau_tensor
         else:
             # Interim timestep - we have cached point at s+1
             x_tau_minus_1 = cache.get_point_at_step(traj_idx, s + 1).unsqueeze(0).to(device)
@@ -232,30 +236,40 @@ def compute_cached_cdmd_loss(
             x_noisy = (1 - t_tau) * x_0_hat + t_tau * z
 
             with torch.no_grad():
-                mu_r = teacher_model(x_noisy, t_tau_tensor)
+                v_r = teacher_model(x_noisy, t_tau_tensor)
+                mu_r = x_noisy - v_r * t_tau_tensor
 
         # Coarse sample 1-step denoising from student
         # Apply forward mapping: x_t = (1-t) * x_0 + t * z where z is new noise
         x_theta_noisy = (1 - t_tau) * x_theta + t_tau * z
 
         with torch.no_grad():
-            mu_f = teacher_model(x_theta_noisy, t_tau_tensor)
+            v_f = teacher_model(x_theta_noisy, t_tau_tensor)
+            mu_f = x_theta_noisy - v_f * t_tau_tensor
 
         all_mu_f.append(mu_f)
         all_mu_r.append(mu_r)
 
-        # Weight factor (can be time-dependent)
-        weight = 1.0 / max(t_tau, 0.01)  # Higher weight for smaller t
-        all_weights.append(weight)
+        # Weight factor
+        # weight = ``.0 / max(t_tau, 0.01)  # Higher weight for smaller t
+        # weight = 1.0 / torch.abs(x_theta - mu_r).mean(dim=1, keepdim=True).clamp(min=1e-4)
+        # weight = 1.0 
+        if torch.sum(x_theta - mu_r) == 0.0:
+            weight = torch.tensor([[1.0]], device=device)
+        else:
+            weight = 1.0 / torch.abs(x_theta - mu_r).mean(dim=1, keepdim=True).clamp(min=1e-4)
+
+        all_weights.append(weight) 
 
     # Stack all tensors
     x_theta_batch = torch.cat(all_x_theta, dim=0)
     mu_f_batch = torch.cat(all_mu_f, dim=0)
     mu_r_batch = torch.cat(all_mu_r, dim=0)
-    weights = torch.tensor(all_weights, device=device).view(-1, 1)
+    weights = torch.cat(all_weights, dim=0) 
 
     # Compute gradient: grad = w(t) * (mu_f - mu_r)
     grad = weights * (mu_f_batch - mu_r_batch)
+    # grad = (mu_f_batch - mu_r_batch)
     grad = torch.nan_to_num(grad)
 
     # CDM loss
@@ -311,6 +325,7 @@ def train_cdmd_cached(
         num_trajectories=num_trajectories,
         n_dims=2,
         max_steps=max_steps,
+        source_generator=source_generator,
         device=device
     )
 
